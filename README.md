@@ -64,3 +64,7 @@ samples, guidance on mobile development, and a full API reference.
 - give me a thorough .gitignore file for a flutter project that includes both android and ios applications
 
 ### And here we are! Initial commit.
+![Splash Screen](assets/images/screenshot1.png)
+![Game Play](assets/images/screenshot2.png)
+![High Scores](assets/images/screenshot3.png)
+![Settings](assets/images/screenshot4.png)
