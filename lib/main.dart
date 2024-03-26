@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:package_info/package_info.dart';
+import 'package:sfmc/sfmc.dart';
 import 'dart:math';
 import 'package:sqflite_sqlcipher/sqflite.dart';
 import 'package:path/path.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 void main() {
   runApp(const HangmanApp());
@@ -14,9 +16,10 @@ class HangmanApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    SFMCSdk.enableLogging();
     return const MaterialApp(
       title: 'The Hanging Trees',
-      home: SplashScreen(), // Updated to SplashScreen
+      home: SplashScreen(),
     );
   }
 }
@@ -25,9 +28,9 @@ abstract class DatabaseHelper {
   Future<void> initializeDatabase();
   Future<void> insertWord(String word);
   Future<List<String>> loadWordList();
-  Future<int?> loadBestScore(String playerName);
   Future<void> updateBestScore(String playerName, int score);
-  Future<List<Map<String, dynamic>>> getHighScores();
+  Future<List<Map<String, dynamic>>> getBestScores();
+  Future<void> removeScore(int id);
 }
 
 class SQLiteHelper extends DatabaseHelper {
@@ -82,16 +85,6 @@ class SQLiteHelper extends DatabaseHelper {
   }
 
   @override
-  Future<int?> loadBestScore(String playerName) async {
-    final List<Map<String, dynamic>> maps = await _database!
-        .query('scores', where: 'name = ?', whereArgs: [playerName]);
-    if (maps.isNotEmpty) {
-      return maps.first['score'] as int;
-    }
-    return null;
-  }
-
-  @override
   Future<void> updateBestScore(String playerName, int score) async {
     await _database!.insert(
       'scores',
@@ -101,7 +94,7 @@ class SQLiteHelper extends DatabaseHelper {
   }
 
   @override
-  Future<List<Map<String, dynamic>>> getHighScores() async {
+  Future<List<Map<String, dynamic>>> getBestScores() async {
     await initializeDatabase(); // Ensure the database is initialized
     final List<Map<String, dynamic>> result = await _database!.query(
       'scores',
@@ -109,6 +102,11 @@ class SQLiteHelper extends DatabaseHelper {
       limit: 10,
     );
     return result;
+  }
+
+  @override
+  Future<void> removeScore(int id) async {
+    await _database!.delete('scores', where: 'id=?', whereArgs: [id]);
   }
 }
 
@@ -148,39 +146,45 @@ class _HangmanGameState extends State<HangmanGame> {
   }
 
   Future<void> promptForName() async {
-    playerName = await showDialog(
+    playerName = await showDialog<String>(
           context: this.context,
-          barrierDismissible: false, // The user must enter a name to proceed
-          builder: (context) {
-            TextEditingController nameController = TextEditingController();
+          barrierDismissible: false,
+          builder: (BuildContext context) {
+            TextEditingController _nameController = TextEditingController();
             return AlertDialog(
               title: const Text('Enter Your Name'),
-              content: TextFormField(
-                controller: nameController,
-                decoration: const InputDecoration(hintText: "Name"),
-                autofocus: true,
-                textCapitalization:
-                    TextCapitalization.words, // Capitalizes each word
-                inputFormatters: [
-                  FilteringTextInputFormatter.allow(
-                      RegExp('[a-zA-Z ]')), // Allows only letters and space
-                ],
+              content: SingleChildScrollView(
+                child: ListBody(
+                  children: <Widget>[
+                    TextField(
+                      controller: _nameController,
+                      autofocus: true,
+                      decoration: const InputDecoration(hintText: 'Name'),
+                      textCapitalization: TextCapitalization.words,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(RegExp('[a-zA-Z ]')),
+                      ],
+                    ),
+                  ],
+                ),
               ),
               actions: <Widget>[
                 TextButton(
                   child: const Text('Start Game'),
                   onPressed: () {
-                    String enteredName = nameController.text.trim();
-                    if (enteredName.isEmpty) {
-                      // Show a prompt or do nothing to force the user to enter a name
+                    // Use a GlobalKey to get the current state of the form and validate it
+                    String enteredName = _nameController.text.trim();
+                    if (enteredName.trim().isNotEmpty) {
+                      Navigator.of(context)
+                          .pop(enteredName); // Pass the entered name back
+                    } else {
+                      // Prompt the user to enter a name if the text field is empty
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text('Please enter a valid name.'),
+                          content: Text('Please enter a name.'),
                           duration: Duration(seconds: 2),
                         ),
                       );
-                    } else {
-                      Navigator.of(context).pop(enteredName);
                     }
                   },
                 ),
@@ -188,12 +192,13 @@ class _HangmanGameState extends State<HangmanGame> {
             );
           },
         ) ??
-        '';
+        "";
 
     if (playerName.isEmpty) {
       await promptForName(); // Call recursively if the name is empty
     } else {
       setState(() {});
+      SFMCSdk.setContactKey(playerName);
     }
   }
 
@@ -214,34 +219,40 @@ class _HangmanGameState extends State<HangmanGame> {
     });
 
     if (incorrectGuesses >= maxGuesses) {
+      SFMCSdk.setAttribute("LastGameResult", "Loser");
       showLoserMessage(guesses: numberOfGuesses);
     }
 
     // Check if the game is over and if the player has won
     if (!getDisplayedWord().contains('_')) {
-      updateHighScore();
+      SFMCSdk.setAttribute("LastGameResult", "Winner");
+      updateBestScore();
     }
   }
 
-  void updateHighScore() {
-    databaseHelper.loadBestScore(playerName).then((score) {
-      if (score == null || numberOfGuesses < score) {
-        databaseHelper.updateBestScore(playerName, numberOfGuesses).then((_) {
-          setState(() {
-            bestScore = numberOfGuesses;
-          });
-          showWinnerMessage(isNewHighScore: true);
-        });
-      } else {
-        showWinnerMessage(isNewHighScore: false);
-      }
-    });
+  void updateBestScore() async {
+    List<Map<String, dynamic>> bestScores =
+        await databaseHelper.getBestScores();
+
+    if (bestScores.length < 10 ||
+        (bestScores.last['score'] as int) > incorrectGuesses) {
+      await databaseHelper
+          .updateBestScore(playerName, incorrectGuesses)
+          .then((value) => showWinnerMessage(isNewBestScore: true));
+    } else {
+      showWinnerMessage(isNewBestScore: false);
+    }
+
+    if (bestScores.length >= 10) {
+      await databaseHelper.removeScore(bestScores.last['id']);
+    }
   }
 
-  void showWinnerMessage({required bool isNewHighScore}) {
+  void showWinnerMessage({required bool isNewBestScore}) {
     String message = "Winner! You've guessed the word correctly.";
-    if (isNewHighScore) {
-      message += "\nNew High Score: $numberOfGuesses!";
+    SFMCSdk.trackEvent(CustomEvent("Purchase", attributes: {"Total": 1234}));
+    if (isNewBestScore) {
+      message += "\nNew Best Score: $incorrectGuesses!";
     }
 
     showDialog(
@@ -451,8 +462,8 @@ class HangmanImage extends StatelessWidget {
   }
 }
 
-class HighScoresScreen extends StatelessWidget {
-  const HighScoresScreen({super.key});
+class BestScoresScreen extends StatelessWidget {
+  const BestScoresScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -460,7 +471,7 @@ class HighScoresScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('High Scores'),
+        title: const Text('Best Scores'),
       ),
       body: Container(
         decoration: const BoxDecoration(
@@ -471,14 +482,14 @@ class HighScoresScreen extends StatelessWidget {
           ),
         ),
         child: FutureBuilder<List<Map<String, dynamic>>>(
-          future: databaseHelper.getHighScores(),
+          future: databaseHelper.getBestScores(),
           builder: (context, snapshot) {
             if (snapshot.connectionState == ConnectionState.waiting) {
               return const Center(child: CircularProgressIndicator());
             } else if (snapshot.hasError) {
               return Center(child: Text('Error: ${snapshot.error}'));
             } else if (!snapshot.hasData || snapshot.data!.isEmpty) {
-              return const Center(child: Text('No high scores yet.'));
+              return const Center(child: Text('No Best Scores yet.'));
             } else {
               final scores = snapshot.data!;
               return ListView.builder(
@@ -547,7 +558,7 @@ class SplashScreen extends StatelessWidget {
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                        builder: (context) => const HighScoresScreen()),
+                        builder: (context) => const BestScoresScreen()),
                   );
                 },
                 child: const Text('Best Scores'),
@@ -578,14 +589,16 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  bool pushNotificationsEnabled = false;
-  bool analyticsCollectionEnabled = false;
-  String? versionNumber;
+  bool _pushNotificationsEnabled = false;
+  bool _analyticsCollectionEnabled = true;
+  bool _loggingEnabled = true;
+  String? _versionNumber;
 
   @override
   void initState() {
     super.initState();
     _getVersionNumber();
+    _checkNotificationPermission();
   }
 
   @override
@@ -608,30 +621,51 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 100), // You can adjust this value as needed
             SwitchListTile(
               title: const Text('Push Notifications'),
-              value: pushNotificationsEnabled,
+              value: _pushNotificationsEnabled,
               onChanged: (bool value) {
                 setState(() {
-                  pushNotificationsEnabled = value;
+                  _pushNotificationsEnabled = value;
                 });
-                // Handle the toggle functionality here
+                _togglePushNotifications(value);
               },
             ),
             SwitchListTile(
               title: const Text('Analytics Collection'),
-              value: analyticsCollectionEnabled,
+              value: _analyticsCollectionEnabled,
               onChanged: (bool value) {
                 setState(() {
-                  analyticsCollectionEnabled = value;
+                  _analyticsCollectionEnabled = value;
                 });
-                // Handle the toggle functionality here
+                SFMCSdk.setAnalyticsEnabled(value);
               },
+            ),
+            SwitchListTile(
+              title: const Text('Enable Logging'),
+              value: _loggingEnabled,
+              onChanged: (bool value) {
+                setState(() {
+                  _loggingEnabled = value;
+                });
+                if (value) {
+                  SFMCSdk.enableLogging();
+                } else {
+                  SFMCSdk.disableLogging();
+                }
+              },
+            ),
+            ElevatedButton(
+              onPressed: () {
+                // Call SFMC SDK method to log SDK state
+                SFMCSdk.logSdkState();
+              },
+              child: const Text('Log SDK State'),
             ),
             Align(
               alignment: Alignment.bottomCenter,
               child: Padding(
                 padding: const EdgeInsets.all(20.0),
                 child: Text(
-                  'Version $versionNumber', // Implement _getVersionNumber to retrieve version number
+                  'Version $_versionNumber', // Implement _getVersionNumber to retrieve version number
                   style: const TextStyle(color: Colors.white),
                   textAlign: TextAlign.center,
                 ),
@@ -646,7 +680,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void _getVersionNumber() async {
     final info = await PackageInfo.fromPlatform();
     setState(() {
-      versionNumber = "${info.version} : ${info.buildNumber}";
+      _versionNumber = "${info.version} : ${info.buildNumber}";
+    });
+  }
+
+  void _checkNotificationPermission() async {
+    PermissionStatus status = await Permission.notification.request();
+    if (status.isPermanentlyDenied) {
+      openAppSettings().then((value) => setState(() {
+            _updateScreenToggle(value);
+          }));
+    } else {
+      _updateScreenToggle(status.isGranted);
+    }
+  }
+
+  void _togglePushNotifications(bool value) async {
+    if (value) {
+      _checkNotificationPermission();
+      SFMCSdk.enablePush();
+    } else {
+      _updateScreenToggle(false);
+      SFMCSdk.disablePush();
+    }
+  }
+
+  void _updateScreenToggle(bool value) {
+    setState(() {
+      _pushNotificationsEnabled = value;
     });
   }
 }

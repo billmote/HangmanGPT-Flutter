@@ -15,6 +15,7 @@ build/
 .flutter-plugins
 .flutter-plugins-dependencies
 .flutter_export_environment.sh
+google-services.json
 
 # Flutter/Dart/Pub related
 **/.dart_tool/

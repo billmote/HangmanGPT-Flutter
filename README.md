@@ -63,7 +63,14 @@ samples, guidance on mobile development, and a full API reference.
 - can we move only the version number info toward the bottom of the screen
 - give me a thorough .gitignore file for a flutter project that includes both android and ios applications
 
-### And here we are! Initial commit.
+#### Release 1.0.0
+
+- Let's ask the player for their permission to send push notifications if they have never been asked before or if they toggle the push notification toggle on the settings screen.
+- how do I add firebase to my application
+- 
+---
+
+### Screenshots
 ![Splash Screen](assets/images/screenshot1.png)
 ![Game Play](assets/images/screenshot2.png)
 ![High Scores](assets/images/screenshot3.png)

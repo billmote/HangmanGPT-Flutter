@@ -1,7 +1,22 @@
+buildscript {
+    repositories {
+            google()
+            mavenCentral()
+            maven {
+                url = uri("https://storage.googleapis.com/r8-releases/raw")
+            }
+        }
+        dependencies {
+            classpath 'com.google.gms:google-services:4.3.15' // Use the latest version
+            classpath 'com.android.tools:r8:8.2.24'
+        }
+}
+
 allprojects {
     repositories {
         google()
         mavenCentral()
+        mavenLocal()
     }
 }
 
